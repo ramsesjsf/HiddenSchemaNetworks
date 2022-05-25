@@ -1,0 +1,56 @@
+name: ptb/gpt2/
+num_runs: 1
+num_workers: 1
+distributed: false
+world_size: 1
+gpus: !!python/tuple ['0']
+seed: 1
+
+model:
+  module: hiddenschemanetworks.models.languagemodels
+  name: GPT2
+  args:
+
+data_loader:
+  module: hiddenschemanetworks.data.dataloaders
+  name: DataLoaderPennTreebank
+  args:
+    batch_size: 32
+    path_to_data: ./data/ptb
+    fix_len: 140
+
+optimizer:
+  module: torch.optim
+  name: Adam
+  args:
+    lr: 0.00001
+    weight_decay: 0.0
+
+trainer:
+  module: hiddenschemanetworks.trainer
+  name: TextTrainer
+  args:
+    bm_metric: NLL-Loss
+    save_after_epoch: 20
+    reconstruction_every: 500
+    num_rec_sentences: 15
+    num_samples: 0
+    num_interpolation_samples: 0
+    num_interpolation_steps: 0
+    heat_map: false
+    lr_schedulers: !!python/tuple
+      - optimizer: # name of the optimizer
+          counter: 1 # anneal lr rate if there is no improvement after n steps
+          module:  torch.optim.lr_scheduler
+          name: StepLR
+          args:
+            step_size: 1
+            gamma: 0.8
+  epochs: 50
+  save_dir: "./results/"
+  logging:
+    tensorboard_dir: "./results/"
+    logging_dir: "./results/"
+    formatters:
+      verbose: "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s"
+      simple: "%(levelname)s %(asctime)s %(message)s"
