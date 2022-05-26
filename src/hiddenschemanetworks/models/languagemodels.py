@@ -281,7 +281,7 @@ class RealSchema(AModel):
         Notation. B: batch size; T: seq len (== fix_len); L: random walk length
         """
         enc_input_seq = minibatch['input_enc']
-        dec_input_seq = minibatch['input_enc']
+        dec_input_seq = minibatch['input_dec']
         target_seq = minibatch['target_dec']
         seq_len = minibatch['length_dec']
         enc_attn_mask = minibatch['attn_mask_enc']

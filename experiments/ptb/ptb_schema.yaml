@@ -1,8 +1,6 @@
 name: ptb/schema/
 num_runs: 1
 num_workers: 1
-distributed: false
-world_size: 1
 gpus: !!python/tuple ['0']
 seed: 1
 
@@ -10,9 +8,9 @@ model:
   module: hiddenschemanetworks.models.languagemodels
   name: RealSchema
   args:
-    n_symbols: 50
+    n_symbols: 100
     Erdos_edge_prob: 0.5
-    word_dropout: 0.3
+    word_dropout: 0.0
     kl_threshold_rw: 0.1
     kl_threshold_graph: 0.1
     ################# GRAPH
@@ -32,7 +30,7 @@ model:
       module: hiddenschemanetworks.models.blocks_transformers
       name: EncoderSchema
       args:
-        rw_length: 5
+        rw_length: 20
     ################# DECODER
     decoder:
       module: hiddenschemanetworks.models.blocks_transformers

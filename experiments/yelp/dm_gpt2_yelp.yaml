@@ -1,8 +1,6 @@
 name: yelp/gpt2/
 num_runs: 1
 num_workers: 1
-distributed: false
-world_size: 1
 gpus: !!python/tuple ['0']
 seed: 1
 

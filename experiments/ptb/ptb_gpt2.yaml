@@ -1,8 +1,6 @@
 name: ptb/gpt2/
 num_runs: 1
 num_workers: 1
-distributed: false
-world_size: 1
 gpus: !!python/tuple ['0']
 seed: 1
 
@@ -47,10 +45,10 @@ trainer:
             step_size: 1
             gamma: 0.8
   epochs: 50
-  save_dir: "./results/"
+  save_dir: ./results
   logging:
-    tensorboard_dir: "./results/"
-    logging_dir: "./results/"
+    tensorboard_dir: ./results
+    logging_dir: ./results
     formatters:
       verbose: "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s"
       simple: "%(levelname)s %(asctime)s %(message)s"

@@ -1,8 +1,6 @@
 name: yahoo/schema/
 num_runs: 1
 num_workers: 1
-distributed: false
-world_size: 1
 gpus: !!python/tuple ['0']
 seed: 1
 
@@ -17,7 +15,7 @@ model:
     kl_threshold_graph: 0.1   # if kl_graph is lower than this, don't penalize it
     ################# GRAPH
     graph_generator:
-      module: hiddenschemanetworks.models.blocks_schema_simple
+      module: hiddenschemanetworks.models.blocks
       name: GraphGenerator
       args:
         symbols2hidden_layers: [!!python/tuple [512, 512]]  # must be list!
@@ -42,7 +40,7 @@ model:
 
 data_loader:
   module: hiddenschemanetworks.data.dataloaders
-  name: DataLoaderYahoo
+  name: DataLoaderYahooAnswers
   args:
     batch_size: 32
     path_to_data: ./data/yahoo

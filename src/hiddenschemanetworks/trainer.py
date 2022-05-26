@@ -8,7 +8,6 @@ from typing import Any, Dict
 
 import matplotlib
 import torch
-import torch.distributed as dist
 import numpy as np
 import yaml
 from torch.utils.tensorboard import SummaryWriter
@@ -16,17 +15,9 @@ from tqdm import tqdm
 import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
-from torch.nn.parallel import DistributedDataParallel as DDP
-
 
 from hiddenschemanetworks.utils.helper import is_primitive, create_instance, get_device
 
-class MyDistributedDataParallel(DDP):
-    def train_step(self, *args, **kwargs):
-        return self.module.train_step(*args, **kwargs)
-
-    def validate_step(self, *args, **kwargs):
-        return self.module.validate_step(*args, **kwargs)
 
 class BaseTrainingProcedure(metaclass=ABCMeta):
 
@@ -34,27 +25,17 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
                  **kwargs):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.data_loader = data_loader
-        self.distributed: bool = distributed
         self.optimizer: dict = optimizer
         self.params: dict = params
         self.rank: int = 0
         self.world_size: int = -1
-        if distributed:
-            self.rank = dist.get_rank()
-            self.world_size = dist.get_world_size()
-            self.device = get_device(params, self.rank, self.logger)
-            self.model = model.to(self.device)
-            self.model = MyDistributedDataParallel(self.model, device_ids=[self.device])
-        else:
-            self.device = get_device(params, self.rank, self.logger)
-            self.model = model.to(self.device)
+        self.device = get_device(params, self.rank, self.logger)
+        self.model = model.to(self.device)
 
-        self.is_rank_0 = (not self.distributed) or (self.distributed and self.rank == 0)
-        if self.is_rank_0:
-            self._prepare_dirs()
-            self._save_params()
-            self.t_logger = self._setup_logging()
-            self.summary = SummaryWriter(self.tensorboard_dir)
+        self._prepare_dirs()
+        self._save_params()
+        self.t_logger = self._setup_logging()
+        self.summary = SummaryWriter(self.tensorboard_dir)
 
         self.start_epoch: int = 0
         self.n_epochs: int = self.params['trainer']['epochs']
@@ -129,16 +110,14 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
         return self.best_model
 
     def _clear_logging_resources(self, e_bar: tqdm) -> None:
-        if self.is_rank_0:
-            self.summary.flush()
-            self.summary.close()
+        self.summary.flush()
+        self.summary.close()
         e_bar.close()
 
     def _booking_model(self, epoch: int, train_log: dict, validate_log: dict) -> None:
-        if self.is_rank_0:
-            self._check_and_save_best_model(train_log, validate_log)
-            if epoch % self.save_after_epoch == 0 and epoch != 0:
-                self._save_check_point(epoch)
+        self._check_and_save_best_model(train_log, validate_log)
+        if epoch % self.save_after_epoch == 0 and epoch != 0:
+            self._save_check_point(epoch)
 
     def _anneal_lr(self, validate_log: dict) -> None:
         if self.lr_schedulers is not None:
@@ -155,7 +134,7 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
 
     def _check_early_stopping(self, log: dict) -> bool:
         cond = list(filter(lambda x: x['opt'].param_groups[0]["lr"] < float(x['min_lr_rate']), self.optimizer.values()))
-        loss = log['loss']
+        loss = log['loss'].detach().cpu()
         return len(cond) != 0 or np.isinf(loss) or np.isnan(loss)
 
     def _train_epoch(self, epoch: int) -> dict:
@@ -182,7 +161,6 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
     def _train_step(self, minibatch: Any, batch_idx: int, epoch: int, p_bar: tqdm) -> dict:
         stats = self.model.train_step(minibatch, self.optimizer, self.global_step, scheduler=self.schedulers)
         self._update_step_p_bar(p_bar, stats)
-        stats = self._recv_stats_across_nodes(stats)
 
         self._log_step('train', epoch, batch_idx, self.data_loader.train_set_size, stats)
         self.global_step += 1
@@ -214,7 +192,6 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
     def _validate_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar: tqdm) -> dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
-        stats = self._recv_stats_across_nodes(stats)
 
         self._log_step('validate', epoch, batch_idx, self.data_loader.validation_set_size, stats)
 
@@ -246,16 +223,8 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
     def _test_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar: tqdm) -> dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
-        stats = self._recv_stats_across_nodes(stats)
         self._log_step('test', epoch, batch_idx, self.data_loader.test_set_size, stats)
 
-        return stats
-
-    def _recv_stats_across_nodes(self, stats: dict) -> dict:
-        if self.world_size != -1:
-            stats = self._average_across_nodes(stats, self.world_size)
-        else:
-            stats = self.tensor_2_item(stats)
         return stats
 
     @staticmethod
@@ -274,21 +243,7 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
                 statistics[k] /= n_batches
         return statistics
 
-    @staticmethod
-    def _average_across_nodes(statistics: dict, world_size: int) -> dict:
-        avg_stats = dict()
-        for k, v in statistics.items():
-            if not isinstance(v, tuple):
-                dist.all_reduce(v, dist.ReduceOp.SUM)
-                avg_stats[k] = v.item() / world_size
-            else:
-                avg_stats[k] = v
-        return avg_stats
-
     def _log_epoch(self, log_label: str, statistics: dict) -> None:
-        if not self.is_rank_0:
-            return None
-
         for k, v in statistics.items():
             if is_primitive(v):
                 self.summary.add_scalar(log_label + k, v, self.global_step)
@@ -379,8 +334,6 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
         return logger
 
     def _log_step(self, step_type: str, epoch: int, batch_idx: int, data_len: int, stats: dict) -> None:
-        if not self.is_rank_0:
-            return None
         log = self._build_raw_log_str(f'{step_type} epoch', batch_idx, epoch, stats, float(data_len), self.batch_size)
         self.t_logger.info(log)
         for k, v in stats.items():
@@ -471,7 +424,7 @@ class TextTrainer(BaseTrainingProcedure):
         return stats
 
     def _log_sample(self, tag, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         B = self.num_of_samples
         if B != 0:
@@ -486,7 +439,7 @@ class TextTrainer(BaseTrainingProcedure):
             self.summary.add_text(tag + 'samples', log, self.global_step)
 
     def _log_interpolation(self, tag, sample, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         n = self.num_of_interpolation_samples
         if n != 0:
@@ -518,7 +471,7 @@ class TextTrainer(BaseTrainingProcedure):
         return transformer
 
     def _log_reconstruction(self, tag, prediction, target, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         B = prediction.size(0)
         sample_size = min(B, self.num_of_rec_sentences)
@@ -549,7 +502,6 @@ class TrainerSimpleSchema(TextTrainer):
         stats = self.model.train_step(minibatch, self.optimizer, self.global_step, scheduler=self.schedulers)
 
         self._update_step_p_bar(p_bar, stats)
-        stats = self._recv_stats_across_nodes(stats)
 
         self._log_step('train', epoch, batch_idx, self.data_loader.train_set_size, stats)
         self.global_step += 1
@@ -568,7 +520,6 @@ class TrainerSimpleSchema(TextTrainer):
     def _validate_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar) -> Dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
-        stats = self._recv_stats_across_nodes(stats)
         self._log_step('validate', epoch, batch_idx, self.data_loader.validation_set_size, stats)
         if len(stats['reconstruction']) > 2:
             self._log_reconstruction_dummy('validate/', stats['reconstruction'][0], stats['reconstruction'][1],
@@ -582,7 +533,6 @@ class TrainerSimpleSchema(TextTrainer):
     def _test_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar) -> Dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
-        stats = self._recv_stats_across_nodes(stats)
         self._log_step('test', epoch, batch_idx, self.data_loader.test_set_size, stats)
         if len(stats['reconstruction']) > 2:
             self._log_reconstruction_dummy('test/', stats['reconstruction'][0], stats['reconstruction'][1],
@@ -598,7 +548,7 @@ class TrainerSimpleSchema(TextTrainer):
         return stats
 
     def _log_reconstruction_dummy(self, tag, prediction, target_a, target_b, z_, z, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         z = z.long().cpu().numpy().astype('str').tolist()
         z_ = z_.long().cpu().detach().numpy().astype('str').tolist()
@@ -622,7 +572,7 @@ class TrainerSimpleSchema(TextTrainer):
         self.summary.add_text(tag + 'reconstruction', str_, self.global_step)
 
     def _log_reconstruction_dummy_2(self, tag, prediction, target, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         str_ = ''
         for i in range(self.num_of_rec_sentences):
@@ -741,7 +691,7 @@ class TrainerRealSchema(BaseTrainingProcedure):
         return stats
 
     def _log_symbols(self, tag, symbols, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         z = symbols.long().cpu().numpy().astype('str').tolist()
         str_ = ''
@@ -754,7 +704,7 @@ class TrainerRealSchema(BaseTrainingProcedure):
         self.summary.add_text(tag + 'symbols', str_, self.global_step)
 
     def _log_reconstruction(self, tag, prediction, target, force_log=False):
-        if (self.global_step % self.reconstruction_every != 0 and not force_log) or (not self.is_rank_0):
+        if self.global_step % self.reconstruction_every != 0 and not force_log:
             return None
         B = prediction.size(0)
         sample_size = min(B, self.num_of_rec_sentences)
