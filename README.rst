@@ -24,6 +24,8 @@ To reproduce any of the synthetic data experiments, run::
 
 where ``<config_file>`` is one of the .yaml files in ``experiments/synthetic``.
 
+In the config file, you can change a number of parameters and most importantly the path where results and trained models are saved.
+
 **Evaluation**
 
 To compute metrics for a whole directory of models, run::
@@ -46,6 +48,7 @@ with ``<path>`` path to a config file, e.g. ``ptb/gpt2.yaml``
 
 For different numbers of symbols, you can modify the option *n_symbols* in the .yaml file,
 and for different random walk lengths, change *rw_length* in the *encoder* section.
+You can also change the directory of the saved models here.
 
 **Evaluation**
 
