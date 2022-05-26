@@ -1,8 +1,6 @@
-name: synth/schema/
+name: synth/erdos_schema/
 num_runs: 1
 num_workers: 1
-distributed: false
-world_size: 1
 gpus: !!python/tuple ['0']
 seed: 1
 
@@ -23,12 +21,12 @@ model:
         n_communities: 128
     #################
     encoder:
-      module: hiddenschemanetworks.models.blocks_schema_simple
+      module: hiddenschemanetworks.models.blocks_synthetic
       name: SimpleTransformerEncoder
       args:
         const_lower_value_f_matrix: 1.0
         train_word_embeddings: true
-        rw_length: [10, 11] # 10 Erdos, 11 Barabasi
+        rw_length: 10 # 10 Erdos, 11 Barabasi
         n_heads: 2
         n_layers: 2
         dropout: 0.2
@@ -38,10 +36,8 @@ data_loader:
   module: hiddenschemanetworks.data.dataloaders
   name: DataLoaderSynthetic
   args:
-    schemata_name: barabasi
-    path_to_data: /raid/data/hiddenschemanetworks/Barabasi_100_Large # ./data/Barabasi ./data/Tree
-#    schemata_name: erdos
-#    path_to_data: /raid/data/hiddenschemanetworks/Erdos # ./data/Barabasi_100_Large
+    schemata_name: erdos
+    path_to_data: ./data/Erdos
     batch_size: 256
 
 optimizer:
@@ -51,19 +47,10 @@ optimizer:
     lr: 0.0001
     weight_decay: 0.0
 
-optimizer_global:
-  module: torch.optim
-  name: Adam
-  args:
-    lr: 0.00001
-    weight_decay: 0.0
-
 trainer:
   module: hiddenschemanetworks.trainer
   name: TrainerSimpleSchema
   args:
-    independent_optimizers: false
-    freeze_every: null
     bm_metric: NLL-Loss
     save_after_epoch: 20
     reconstruction_every: 50000
@@ -107,14 +94,6 @@ trainer:
           n_steps_to_rich_maximum: 10000   # for exp. sched.
           validation_value: 1.0
       - module: hiddenschemanetworks.utils.param_scheduler
-        name: ConstantScheduler
-        label: beta_scheduler_kl_gamma
-        args:
-          beta: 1.0                 # for const. sched.
-          max_value: 1.0                   # for exp. sched.
-          n_steps_to_rich_maximum: 10000   # for exp. sched.
-          validation_value: 1.0
-      - module: hiddenschemanetworks.utils.param_scheduler
         name: ConstantScheduler  # ConstantScheduler, ExponentialSchedulerGumbel
         label: temperature_scheduler_graph
         args:
@@ -124,10 +103,10 @@ trainer:
           n_steps_to_rich_minimum: 120000
           validation_value: 0.5
   epochs: 200
-  save_dir: "/rdata/results/synthetic_schemata/"
+  save_dir: ./results
   logging:
-    tensorboard_dir: "/rdata/results/synthetic_schemata/"
-    logging_dir: "/rdata/results/synthetic_schemata/"
+    tensorboard_dir: ./results
+    logging_dir: ./results
     formatters:
       verbose: "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s"
       simple: "%(levelname)s %(asctime)s %(message)s"

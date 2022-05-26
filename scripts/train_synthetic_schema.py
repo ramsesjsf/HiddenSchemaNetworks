@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import itertools
 import logging
 import os
 import sys
@@ -11,12 +10,8 @@ from pathlib import Path
 import click
 import numpy as np
 import torch
-from IPython.core import ultratb
-from tyche.utils.helper import load_params, create_instance, expand_params, get_device, get_independent_opts
-import gentext
-
-# fallback to debugger on error
-sys.excepthook = ultratb.FormattedTB(mode='Verbose', color_scheme='Linux', call_pdb=1)
+from hiddenschemanetworks.utils.helper import load_params, create_instance, expand_params, get_device, get_independent_opts
+import hiddenschemanetworks
 
 _logger = logging.getLogger(__name__)
 
@@ -31,7 +26,7 @@ _logger = logging.getLogger(__name__)
 @click.option('-r', '--resume_training', 'resume', is_flag=True, default=False,
               help='resume training from the last checkpoint')
 
-@click.version_option(gentext.__version__)
+@click.version_option(hiddenschemanetworks.__version__)
 def main(cfg_path: Path, log_level: int, debug: bool, resume: bool):
     logging.basicConfig(stream=sys.stdout,
                         level=log_level,
@@ -81,28 +76,10 @@ def train_params(params, resume, debug=False):
 def init_optimizer(model, params):
     optimizers = dict()
 
-    independent_opt = get_independent_opts(params)
-    if independent_opt:
-        local_param = itertools.chain(*[model.encoder.parameters(), model.decoder.parameters()]) \
-            if model.decoder is not None else model.encoder.parameters()
-
-        optimizer = create_instance('optimizer', params, local_param)
-        optimizers['optimizer'] = {'opt': optimizer,
-                                   'grad_norm': params['optimizer'].get('gradient_norm_clipping', None),
-                                   'min_lr_rate': params['optimizer'].get('min_lr_rate', 1e-8)}
-
-        global_param = model.graph_generator.parameters()
-        optimizer_global = create_instance('optimizer_global', params, global_param)
-        optimizer_global.add_param_group({'params': model.symbols})
-
-        optimizers['optimizer_global'] = {'opt': optimizer_global,
-                                          'grad_norm': params['optimizer_global'].get('gradient_norm_clipping', None),
-                                          'min_lr_rate': params['optimizer_global'].get('min_lr_rate', 1e-8)}
-    else:
-        optimizer = create_instance('optimizer', params, model.parameters())
-        optimizers['optimizer'] = {'opt': optimizer,
-                               'grad_norm': params['optimizer'].get('gradient_norm_clipping', None),
-                               'min_lr_rate': params['optimizer'].get('min_lr_rate', 1e-8)}
+    optimizer = create_instance('optimizer', params, model.parameters())
+    optimizers['optimizer'] = {'opt': optimizer,
+                           'grad_norm': params['optimizer'].get('gradient_norm_clipping', None),
+                           'min_lr_rate': params['optimizer'].get('min_lr_rate', 1e-8)}
 
     return optimizers
 

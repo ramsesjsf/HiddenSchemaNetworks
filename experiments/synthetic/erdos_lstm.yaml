@@ -1,7 +1,6 @@
-name: synth/lstm/
+name: synth/erdos_lstm/
 num_runs: 1
 num_workers: 1
-world_size: 1
 gpus: !!python/tuple ['0']
 seed: 1
 
@@ -12,7 +11,7 @@ model:
     emb_dim: 256
     rw_length: 10
     encoder:
-      module: hiddenschemanetworks.models.blocks_schema_simple
+      module: hiddenschemanetworks.models.blocks_synthetic
       name: NonAutoRegEncoderRNN
       args:
         rnn_dim: 256
@@ -22,8 +21,6 @@ data_loader:
   module: hiddenschemanetworks.data.dataloaders
   name: DataLoaderSynthetic
   args:
-#    schemata_name: barabasi
-#    path_to_data: ./data/Barabasi_100_Large # ./data/Barabasi ./data/Tree
     schemata_name: erdos
     path_to_data: ./data/Erdos # ./data/Barabasi_100_Large
     batch_size: 32

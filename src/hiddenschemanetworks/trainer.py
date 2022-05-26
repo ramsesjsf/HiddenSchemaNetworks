@@ -134,7 +134,7 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
 
     def _check_early_stopping(self, log: dict) -> bool:
         cond = list(filter(lambda x: x['opt'].param_groups[0]["lr"] < float(x['min_lr_rate']), self.optimizer.values()))
-        loss = log['loss'].detach().cpu()
+        loss = log['loss']
         return len(cond) != 0 or np.isinf(loss) or np.isnan(loss)
 
     def _train_epoch(self, epoch: int) -> dict:
@@ -161,6 +161,7 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
     def _train_step(self, minibatch: Any, batch_idx: int, epoch: int, p_bar: tqdm) -> dict:
         stats = self.model.train_step(minibatch, self.optimizer, self.global_step, scheduler=self.schedulers)
         self._update_step_p_bar(p_bar, stats)
+        stats = self.tensor_2_item(stats)
 
         self._log_step('train', epoch, batch_idx, self.data_loader.train_set_size, stats)
         self.global_step += 1
@@ -192,6 +193,7 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
     def _validate_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar: tqdm) -> dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
+        stats = self.tensor_2_item(stats)
 
         self._log_step('validate', epoch, batch_idx, self.data_loader.validation_set_size, stats)
 
@@ -223,6 +225,7 @@ class BaseTrainingProcedure(metaclass=ABCMeta):
     def _test_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar: tqdm) -> dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
+        stats = self.tensor_2_item(stats)
         self._log_step('test', epoch, batch_idx, self.data_loader.test_set_size, stats)
 
         return stats
@@ -496,12 +499,15 @@ class TrainerSimpleSchema(TextTrainer):
         super(TrainerSimpleSchema, self).__init__(model, optimizer, resume, params, data_loader,
                                                   train_logger=train_logger, **kwargs)
 
+        self.heat_map = True
+
     def _train_step(self, minibatch: Any, batch_idx: int, epoch: int, p_bar) -> Dict:
 
 
         stats = self.model.train_step(minibatch, self.optimizer, self.global_step, scheduler=self.schedulers)
 
         self._update_step_p_bar(p_bar, stats)
+        stats = self.tensor_2_item(stats)
 
         self._log_step('train', epoch, batch_idx, self.data_loader.train_set_size, stats)
         self.global_step += 1
@@ -520,6 +526,7 @@ class TrainerSimpleSchema(TextTrainer):
     def _validate_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar) -> Dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
+        stats = self.tensor_2_item(stats)
         self._log_step('validate', epoch, batch_idx, self.data_loader.validation_set_size, stats)
         if len(stats['reconstruction']) > 2:
             self._log_reconstruction_dummy('validate/', stats['reconstruction'][0], stats['reconstruction'][1],
@@ -533,6 +540,7 @@ class TrainerSimpleSchema(TextTrainer):
     def _test_step(self, minibatch: dict, batch_idx: int, epoch: int, p_bar) -> Dict:
         stats = self.model.validate_step(minibatch)
         self._update_step_p_bar(p_bar, stats)
+        stats = self.tensor_2_item(stats)
         self._log_step('test', epoch, batch_idx, self.data_loader.test_set_size, stats)
         if len(stats['reconstruction']) > 2:
             self._log_reconstruction_dummy('test/', stats['reconstruction'][0], stats['reconstruction'][1],
@@ -543,7 +551,8 @@ class TrainerSimpleSchema(TextTrainer):
 
         del stats['reconstruction']
 
-        self._log_heatmap_wordprob(batch_idx)
+        if self.heat_map:
+            self._log_heatmap_wordprob(batch_idx)
 
         return stats
 

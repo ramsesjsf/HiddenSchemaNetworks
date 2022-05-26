@@ -6,6 +6,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Gamma
+
 from hiddenschemanetworks.models.helper_functions import clip_grad_norm
 from transformers import GPT2LMHeadModel, GPT2Config
 
@@ -615,7 +617,6 @@ class SyntheticSchema(AModel):
         # Random graph model
         adj_matrix, link_prob, params_graph_model = self.graph_generator(self.symbols,
                                                                            tau_graph,
-                                                                           batch_size,
                                                                            hard=hard)
 
         weibull_variable = self.sample_gamma_var_prior()
@@ -627,7 +628,7 @@ class SyntheticSchema(AModel):
         # Random walk inference model:
         p_matrix = self.get_transition_prob_matrix(adj_matrix)
         z_post, kl_rws, kl_0, walk_prob_aux = self.encoder(input_enc, adj_matrix, tau_rw,
-                                                           (p_matrix, self.f0_prior),
+                                                           (p_matrix, None),
                                                            z_real, hard=hard)  # [B, L, number_symbols]
 
         z = z_post
@@ -891,6 +892,12 @@ class SyntheticSchema(AModel):
         stats['cross_entropy_walks'] = torch.tensor(0, device=self.device)
         stats['ground_truth_cost'] = torch.tensor(0, device=self.device)
         return stats
+
+    def sample_gamma_var_prior(self):
+        b = torch.ones([self.n_symbols, self.graph_generator.n_communities]).to(self.device).fill_(self.default_rate)
+        a = np.sqrt(2.0 / (self.graph_generator.n_communities * (self.n_symbols - 1))) * b
+        w = Gamma(a, b).sample()
+        return w
 
 
 class NARRNN(AModel):

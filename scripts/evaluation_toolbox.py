@@ -5,17 +5,27 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import click
 
 from hiddenschemanetworks.utils.helper import create_instance, load_params
 from hiddenschemanetworks.utils.interpolation import Interpolation
 from hiddenschemanetworks.models.languagemodels import RealSchema
 
+@click.command()
+@click.option('-p', '--path', 'path', required=True)
+@click.option('-n', '--model_name', 'model_name', required=True)
+
+def load_and_evaluate(path, model_name):
+    schema = Model(path, model_name)
+    schema.evaluate_metrics()
+
+
 class Model():
 
-    def __init__(self, path, model_name, version='best_model.pth', device='cuda:1', data_loader=None, batch_size=32,
+    def __init__(self, path, model_name, version='best_model.pth', device='cuda:0', data_loader=None, batch_size=32,
                  custom_path_to_data=None):
         """
-        load a trained RealSchemaPretrained model saved in '<path>/<model_name>/<version>
+        load a trained RealSchema or GPT2 model saved in '<path>/<model_name>/<version>
         with .yaml file '<path>/<model_name>/config.yaml'
         version defaults to 'best_model.pth'
         """
@@ -38,7 +48,7 @@ class Model():
                                      self.data_loader.pad_token_id,
                                      self.data_loader.fix_len).to(self.device)
 
-        state_dict = torch.load(os.path.join(path + model_name, version), self.device)['model_state']
+        state_dict = torch.load(os.path.join(path, model_name, version), self.device)['model_state']
 
         try:
             self.model.load_state_dict(state_dict)
@@ -459,20 +469,25 @@ class Model():
 if __name__ == "__main__":
     torch.set_grad_enabled(False)
 
-    path = './results'
-    model_name = 'ptb/schema/2505_185447'
-    version = 'best_model.pth'
+
+    load_and_evaluate()
+
+    #path = './results'
+    #model_name = 'ptb/schema/2505_185447'
+
+
 
     # load a model:
-    schema = Model(path, model_name, device='cuda:0')
+    #schema = Model(path, model_name)
 
-    schema.evaluate_metrics()
-    schema.generate(decoding_method='K-beam_search')
-    schema.interpolate()
-    schema.print_reconstructions()
-    schema.histogram()
+    #schema.evaluate_metrics()
+    #schema.generate(decoding_method='K-beam_search')
+    #if schema.is_schema:
+    #    schema.interpolate()
+    #    schema.print_reconstructions()
+    #    schema.histogram()
 
 
-    save_path_ = './results/'
-    os.makedirs(save_path_, exist_ok=True)
-    schema.save_rw_graph_label(save_path_, single_graph=False)
+    #    save_path_ = './results/'
+    #    os.makedirs(save_path_, exist_ok=True)
+    #    schema.save_rw_graph_label(save_path_, single_graph=False)
