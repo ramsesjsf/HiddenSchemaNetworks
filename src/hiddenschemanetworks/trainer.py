@@ -719,8 +719,8 @@ class TrainerRealSchema(BaseTrainingProcedure):
         sample_size = min(B, self.num_of_rec_sentences)
         ix_ = np.random.randint(0, B, sample_size)
 
-        t = self.data_loader.train.dataset.tokenizer_dec.batch_decode(target[ix_], skip_special_tokens=False)
-        r = self.data_loader.train.dataset.tokenizer_dec.batch_decode(prediction[ix_], skip_special_tokens=False)
+        t = self.data_loader.train.dataset.reverse(target[ix_])
+        r = self.data_loader.train.dataset.reverse(prediction[ix_])
 
         log = []
         for i, j in zip(t, r):

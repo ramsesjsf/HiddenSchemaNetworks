@@ -10,7 +10,8 @@ import numpy as np
 from scipy import sparse as sp
 
 
-from hiddenschemanetworks.data.datasets import PennTreebank, YelpReview, YahooAnswers, SyntheticSchemataDataset
+from hiddenschemanetworks.data.datasets import PennTreebank, YelpReview, YahooAnswers,\
+    SyntheticSchemataDataset, PCFG
 
 sampler = torch.utils.data.RandomSampler
 
@@ -201,7 +202,8 @@ class DataLoaderText(ADataLoader):
 
         self._pad_token_id = train_dataset.get_pad_token_id()
 
-        self._tokenizer = train_dataset.tokenizer_dec
+        if not isinstance(self, DataLoaderPCFG):
+            self._tokenizer = train_dataset.tokenizer_dec
 
     @property
     def train(self):
@@ -268,3 +270,26 @@ class DataLoaderYelpReview(DataLoaderText):
                           fix_len=self._fix_len)
 
 
+class DataLoaderPCFG(DataLoaderText):
+    """
+    Data loader for PTB with pretrained tokenizers and models from huggingface
+    """
+    def __init__(self, device, rank: int = 0, world_size=-1, **kwargs):
+        super().__init__(device, rank, world_size, **kwargs)
+
+    def get_datasets(self, path_to_data):
+        return PCFG(root=path_to_data, fix_len=self._fix_len)
+
+    @property
+    def vocab(self):
+        return self._train_iter.dataset.vocab
+
+    @property
+    def tokenizer(self):
+        return None
+
+if __name__ == '__main__':
+    loader = DataLoaderPCFG(torch.device('cuda:0'), path_to_data='/raid/data/pcfg', batch_size=10)
+
+    for mb in loader.train:
+        print(mb)

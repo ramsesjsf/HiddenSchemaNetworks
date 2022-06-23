@@ -526,6 +526,7 @@ class RealSchema(AModel):
         stats['symbols'] = torch.tensor(0, device=self.device)
         return stats
 
+
 class SyntheticSchema(AModel):
     """
     Simple Schemata

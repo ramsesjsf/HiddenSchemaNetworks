@@ -5,16 +5,13 @@ from collections import defaultdict
 import numpy as np
 
 from tqdm import tqdm
-from torchtext.utils import download_from_url, extract_archive
+from torchtext.utils import download_from_url
 from transformers import GPT2Tokenizer, BertTokenizer
 import pickle
 import torch
 from torch.utils.data import Dataset
 from collections import namedtuple
-from torchtext.data.utils import get_tokenizer
-from torchtext.vocab import Vocab
-from torchtext.data.functional import numericalize_tokens_from_iterator
-from hiddenschemanetworks.data.utils import build_vocab_from_iterator
+from torchtext.vocab import build_vocab_from_iterator, Vocab
 
 
 
@@ -32,7 +29,14 @@ URLS = {
     'YelpReview':
         ['https://github.com/fangleai/Implicit-LVM/raw/master/lang_model_yelp/data/yelp.train.txt',
          'https://github.com/fangleai/Implicit-LVM/raw/master/lang_model_yelp/data/yelp.test.txt',
-         'https://github.com/fangleai/Implicit-LVM/raw/master/lang_model_yelp/data/yelp.valid.txt']
+         'https://github.com/fangleai/Implicit-LVM/raw/master/lang_model_yelp/data/yelp.valid.txt'],
+    'PCFG':
+        [('https://raw.githubusercontent.com/i-machine-think/am-i-compositional/master/data/pcfgset/pcfgset/train.src',
+          'https://raw.githubusercontent.com/i-machine-think/am-i-compositional/master/data/pcfgset/pcfgset/train.tgt'),
+         ('https://raw.githubusercontent.com/i-machine-think/am-i-compositional/master/data/pcfgset/pcfgset/test.src',
+          'https://raw.githubusercontent.com/i-machine-think/am-i-compositional/master/data/pcfgset/pcfgset/test.tgt'),
+         ('https://raw.githubusercontent.com/i-machine-think/am-i-compositional/master/data/pcfgset/pcfgset/dev.src',
+          'https://raw.githubusercontent.com/i-machine-think/am-i-compositional/master/data/pcfgset/pcfgset/dev.tgt')]
 }
 
 def _get_datafile_path(key, extracted_files):
@@ -40,7 +44,7 @@ def _get_datafile_path(key, extracted_files):
         if key in fname:
             return fname
 
-class LanguageModelingDatasetPretrained(torch.utils.data.Dataset):
+class LanguageModelingDatasetPretrained(Dataset):
     """
     Defines a dataset for language modeling using pretrained tokenizers from huggingface transformers.
     """
@@ -245,12 +249,115 @@ def PennTreebank(*args, **kwargs):
 
     return _setup_datasets(*(("PennTreebank",) + args), **kwargs)
 
-
 def YahooAnswers(*args, **kwargs):
     return _setup_datasets(*(("YahooAnswers",) + args), **kwargs)
 
 def YelpReview(*args, **kwargs):
     return _setup_datasets(*(("YelpReview",) + args), **kwargs)
+
+def _setup_pcfg(fix_len=225, root='./data'):
+
+    local_paths = []
+    for url_tuple in URLS['PCFG']:
+        path_tuple = []
+        for url in url_tuple:
+            filename = os.path.basename(url)
+            path = os.path.join(root, filename)
+            if not os.path.exists(path):
+                download_from_url(url, root=root)
+            path_tuple.append(path)
+        local_paths.append(tuple(path_tuple))
+
+    dataset_list = []
+    for i, path_tuple in enumerate(local_paths):
+        source_path, target_path = path_tuple
+        source_file = open(source_path, 'r').read()
+        target_file = open(target_path, 'r').read()
+        if i == 0:
+            vocab = Vocab(build_vocab_from_iterator([source_file.split()], specials=['<sos>', '<eos>']))
+        SOS = vocab['<sos>']
+        EOS = vocab['<eos>']
+
+        dataset = []
+        for source_line, target_line in zip(source_file.split('\n')[:-1], target_file.split('\n')[:-1]):
+            data = dict()
+
+            source_tokens = source_line.split(' ')
+            source_tokens = vocab(source_tokens[:min(len(source_tokens), fix_len)])
+            target_tokens = target_line.split(' ')
+            target_tokens = vocab(target_tokens[:min(len(target_tokens), fix_len-1)])
+
+
+            source_len = len(source_tokens)
+            target_len = len(target_tokens)
+            source_pad_len = fix_len - source_len
+            target_pad_len = fix_len - target_len - 1
+
+            data['length_enc'] = source_len
+            data['input_enc'] = source_tokens + [SOS] * source_pad_len
+            data['attn_mask_enc'] = [1] * source_len + [0] * source_pad_len
+
+            data['length_dec'] = target_len
+            data['input_dec'] = [SOS] + target_tokens + [EOS] * target_pad_len
+            data['attn_mask_dec'] = [1] * (target_len + 1) + [0] * target_pad_len
+            data['target_dec'] = target_tokens + [EOS] + [-100] * target_pad_len
+
+            dataset.append(data)
+
+        dataset_list.append(dataset)
+
+    return tuple(PCFGDataset(data, vocab) for data in dataset_list)
+
+
+
+
+def PCFG(*args, **kwargs):
+    return _setup_pcfg(*args, **kwargs)
+
+class PCFGDataset(Dataset):
+    def __init__(self, data, vocab):
+        self.data = data
+        self.vocab = vocab
+
+    def __getitem__(self, i):
+        return {'input_enc': np.asarray(self.data[i]['input_enc'], dtype=np.int64),
+                     'attn_mask_enc': np.asarray(self.data[i]['attn_mask_enc']),
+                     'length_enc': np.asarray(self.data[i]['length_enc']),
+                     'input_dec': np.asarray(self.data[i]['input_dec'], dtype=np.int64),
+                     'target_dec': np.asarray(self.data[i]['target_dec'], dtype=np.int64),
+                     'attn_mask_dec': np.asarray(self.data[i]['attn_mask_dec']),
+                     'length_dec': np.asarray(self.data[i]['length_dec'])
+                     }
+
+    def __iter__(self):
+        for i in range(self.__len__()):
+            print(i)
+            yield self[i]
+
+    def __len__(self):
+        return len(self.data)
+
+    def get_pad_token_id(self):
+        return -100
+
+    def reverse(self, batch):
+        sentences = []
+        for indices in batch:
+
+            #index_of_pad = ind if (ind := [indices == -100].nonzero()[0]) > 0 else len(indices)-1
+            #indices = indices[:index_of_pad]
+            indices[indices == -100] = 0
+            tokens = self.vocab.lookup_tokens(list(indices))
+            sentences.append(' '.join(tokens))
+
+        return sentences
+
+
+
+
+
+
+
 
 Point = namedtuple('Point', 'walks, text')
 
@@ -278,3 +385,10 @@ class SyntheticSchemataDataset(Dataset):
     def get_vocab(self):
         return self.vocab
 
+if __name__ == '__main__':
+    train, _, _ = PCFG(fix_len=100, root='/raid/data/pcfg')
+
+    mb = train[0]
+    inp = torch.tensor([mb['input_dec']])
+    print(inp)
+    print(train.reverse(inp))

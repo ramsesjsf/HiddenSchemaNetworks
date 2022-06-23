@@ -39,7 +39,15 @@ class EncoderSchema(EncodeOntoRW):
                                             **kwargs)
 
         config = BertConfig().from_pretrained('bert-base-uncased')
-        self.get_hidden_states = BertModel.from_pretrained('bert-base-uncased')
+
+        vocab_size = kwargs.get('vocab_size', None)
+        if vocab_size is not None:
+            config.vocab_size = vocab_size
+
+        if kwargs.get('pretrained', True):
+            self.get_hidden_states = BertModel.from_pretrained('bert-base-uncased', config=config)
+        else:
+            self.get_hidden_states = BertModel(config)
 
         self.cross_att_learn_queries = CrossAttentionWithLearnableQueries(config.hidden_size,
                                                                           config.num_attention_heads,
@@ -58,7 +66,6 @@ class EncoderSchema(EncodeOntoRW):
     def get_functions_over_nodes(self, input):
 
         input_ids, attention_mask = input
-
         hidden_states = self.get_hidden_states(input_ids=input_ids,
                                                attention_mask=attention_mask,
                                                token_type_ids=None,
@@ -274,13 +281,23 @@ class DecoderSchema(Block):
     def __init__(self, fix_len, symbol_dim, rw_len, **kwargs):
         super(DecoderSchema, self).__init__(fix_len=fix_len, use_huggingface_models=True, **kwargs)
 
+        config = GPT2Config.from_pretrained('gpt2')
+        vocab_size = kwargs.get('vocab_size', None)
+        if vocab_size is not None:
+            config.vocab_size = vocab_size
         rw_pos_encoding = kwargs.get('rw_pos_encoding', False)
-        self.get_logits, self.loading_info = PseudoSelfAttentionGPT2LMHeadModel.from_pretrained('gpt2',
-                                                                                                rw_len=rw_len,
-                                                                                                symbol_dim=symbol_dim,
-                                                                                                rw_pos_encoding=rw_pos_encoding,
-                                                                                                output_loading_info=True)
-
+        if kwargs.get('pretrained', True):
+            self.get_logits, self.loading_info = PseudoSelfAttentionGPT2LMHeadModel.from_pretrained('gpt2',
+                                                                                                    rw_len=rw_len,
+                                                                                                    symbol_dim=symbol_dim,
+                                                                                                    rw_pos_encoding=rw_pos_encoding,
+                                                                                                    output_loading_info=True,
+                                                                                                    config=config)
+        else:
+            self.get_logits = PseudoSelfAttentionGPT2LMHeadModel(rw_len=rw_len,
+                                                                symbol_dim=symbol_dim,
+                                                                rw_pos_encoding=rw_pos_encoding,
+                                                                config=config)
     def forward(self,
                 input_ids,
                 symbol_seq,
