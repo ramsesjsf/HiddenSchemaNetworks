@@ -1,7 +1,7 @@
-name: pcfg/schema/
+name: pcfg/schema_atomic_style/
 num_runs: 1
 num_workers: 1
-gpus: !!python/tuple ['1']
+gpus: !!python/tuple ['0']
 seed: 1
 
 model:
@@ -10,7 +10,7 @@ model:
   args:
     n_symbols: [100]
     Erdos_edge_prob: 0.5
-    word_dropout: [0.0]
+    word_dropout: 0.0
     kl_threshold_rw: 0.1
     kl_threshold_graph: 0.1
     ################# GRAPH
@@ -46,15 +46,15 @@ model:
         num_attention_heads: 8
         intermediate_size: 2048
         pretrained: False
-        decoder_type: [GPT2-CrossAttention, GPT2-PseudoSelfAttention]
+        decoder_type: [GPT2-CrossAttention]
 
 data_loader:
   module: hiddenschemanetworks.data.dataloaders
   name: DataLoaderPCFG
   args:
-    batch_size: 64
+    batch_size: 128
     path_to_data: /raid/data/pcfg
-    fix_len: 225
+    atomic_style: true
 
 optimizer:
   module: torch.optim
@@ -83,7 +83,7 @@ trainer:
         name: PeriodicScheduler  # ExponentialIncrease, ConstantScheduler, PeriodicScheduler
         label: beta_scheduler_kl_rws
         args:
-          max_value: 0.0                  # for exp. sched.
+          max_value: 0.1                  # for exp. sched.
           beta: 1.0                       # for const. sched.
           training_fraction_to_reach_max: 0.5  # for exp. sched.False
           validation_value: 1.0
@@ -101,7 +101,7 @@ trainer:
         label: beta_scheduler_kl_graph
         args:
           beta: 1.0                       # for const. sched.
-          max_value: 0.0                  # for exp. sched.
+          max_value: 10.0                  # for exp. sched.
           training_fraction_to_reach_max: 0.5   # for exp. sched.
           validation_value: 0.1
       - module: hiddenschemanetworks.utils.param_scheduler

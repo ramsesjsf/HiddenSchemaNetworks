@@ -700,7 +700,7 @@ class TrainerRealSchema(BaseTrainingProcedure):
         return stats
 
     def _log_symbols(self, tag, symbols, force_log=False):
-        if self.global_step % self.reconstruction_every != 0 and not force_log:
+        if (self.global_step % self.reconstruction_every != 0 and not force_log) or isinstance(symbols, int):
             return None
         z = symbols.long().cpu().numpy().astype('str').tolist()
         str_ = ''

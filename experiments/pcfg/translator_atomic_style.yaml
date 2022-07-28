@@ -1,0 +1,73 @@
+name: pcfg/translator_atomic_style/
+num_runs: 1
+num_workers: 1
+gpus: !!python/tuple ['1']
+seed: 1
+
+model:
+  module: hiddenschemanetworks.models.languagemodels
+  name: Translator
+  args:
+    word_dropout: 0.0
+    encoder:
+      args:
+        hidden_size: 512
+        num_hidden_layers: 6
+        num_attention_heads: 8
+        intermediate_size: 2048
+        pretrained: False
+    decoder:
+      args:
+        hidden_size: 512
+        num_hidden_layers: 6
+        num_attention_heads: 8
+        intermediate_size: 2048
+        pretrained: False
+
+data_loader:
+  module: hiddenschemanetworks.data.dataloaders
+  name: DataLoaderPCFG
+  args:
+    batch_size: 256
+    path_to_data: /raid/data/pcfg
+    atomic_style: true
+
+optimizer:
+  module: torch.optim
+  name: Adam
+  args:
+    lr: 0.0001
+    betas: !!python/tuple [0.9, 0.998]
+
+trainer:
+  module: hiddenschemanetworks.trainer
+  name: TrainerRealSchema
+  args:
+    bm_metric: NLL-Loss
+    save_after_epoch: 20
+    reconstruction_every: 500
+    num_rec_sentences: 10
+    num_samples: 0
+    lr_schedulers: !!python/tuple
+      - optimizer: # name of the optimizer
+          counter: 0 # anneal lr rate if there is no improvement after n steps
+          module:  torch.optim.lr_scheduler
+          name: StepLR
+          args:
+            step_size: 1
+            gamma: 0.8
+    schedulers: !!python/tuple
+      - module: hiddenschemanetworks.utils.param_scheduler
+        name: WarmupScheduler  # ExponentialIncrease, ConstantScheduler, PeriodicScheduler
+        label: lr_scheduler
+        args:
+          max_value: 2.0                  # for exp. sched.
+          warmup_steps: 8000
+  epochs: 200
+  save_dir: /rdata/results
+  logging:
+    tensorboard_dir: /rdata/results
+    logging_dir: /rdata/results
+    formatters:
+      verbose: "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s"
+      simple: "%(levelname)s %(asctime)s %(message)s"

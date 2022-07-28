@@ -99,3 +99,16 @@ class PeriodicScheduler(object):
             return (step - 2 * self.quarter_epoch_length) / self.quarter_epoch_length * self.max_value
         else:
             return self.max_value
+
+class WarmupScheduler(object):
+    """
+    """
+
+    def __init__(self, n_train_batches, n_epochs, **kwargs):
+        self.epoch_length = n_train_batches
+        self.max_value = kwargs.get('max_value', 1.0)
+        self.warmup_steps = kwargs.get('warmup_steps', 1000)
+
+    def __call__(self, step):
+        step = step + 1 if step == 0 else step
+        return 512**(-0.5) * min(step**(-0.5), step * self.warmup_steps**(-1.5)) * self.max_value

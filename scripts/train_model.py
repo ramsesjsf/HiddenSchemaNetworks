@@ -65,11 +65,14 @@ def train_params(params, resume, debug=False):
     data_loader = create_instance('data_loader', params, device)
 
     if data_loader.vocab is not None:
-        params['model']['args']['encoder']['args'].update({'vocab_size': len(data_loader.vocab)})
-        if params['model']['args']['decoder']['args'] is None:
-            params['model']['args']['decoder']['args'] = {'vocab_size': len(data_loader.vocab)}
+        if params['model']['name'] == 'GPT2':
+            params['model']['args'].update({'vocab_size': len(data_loader.vocab)})
         else:
-            params['model']['args']['decoder']['args'].update({'vocab_size': len(data_loader.vocab)})
+            params['model']['args']['encoder']['args'].update({'vocab_size': len(data_loader.vocab)})
+            if params['model']['args']['decoder']['args'] is None:
+                params['model']['args']['decoder']['args'] = {'vocab_size': len(data_loader.vocab)}
+            else:
+                params['model']['args']['decoder']['args'].update({'vocab_size': len(data_loader.vocab)})
 
     model = create_instance('model', params, data_loader.pad_token_id, data_loader.fix_len)
 

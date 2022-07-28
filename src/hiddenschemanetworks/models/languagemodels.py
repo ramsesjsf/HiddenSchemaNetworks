@@ -8,8 +8,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Gamma
 
+from hiddenschemanetworks.models.blocks_transformers import PseudoSelfAttentionGPT2LMHeadModel
 from hiddenschemanetworks.models.helper_functions import clip_grad_norm
 from transformers import GPT2LMHeadModel, GPT2Config
+from transformers import BertModel, BertConfig
+
 
 from hiddenschemanetworks.utils.helper import create_instance
 
@@ -41,7 +44,21 @@ class GPT2(AModel):
         self.fix_len = fix_len
         self.ignore_index = pad_token_id
 
-        self.get_logits = GPT2LMHeadModel.from_pretrained('gpt2')
+
+        self.pretrained = kwargs.get('pretrained', True)
+        if self.pretrained:
+            self.get_logits = GPT2LMHeadModel.from_pretrained('gpt2')
+        else:
+            config = GPT2Config.from_pretrained('gpt2')
+            config.n_embd = kwargs.get('hidden_size', config.n_embd)
+            config.n_layer = kwargs.get('num_hidden_layers', config.n_layer)
+            config.n_head = kwargs.get('num_attention_heads', config.n_head)
+            config.n_inner = kwargs.get('intermediate_size', config.n_inner)
+            vocab_size = kwargs.get('vocab_size', None)
+            if vocab_size is not None:
+                config.vocab_size = vocab_size
+
+            self.get_logits = GPT2LMHeadModel(config=config)
 
         if self.metrics is not None:
             for m in self.metrics:
@@ -81,7 +98,7 @@ class GPT2(AModel):
         return stats
 
 
-    def metric(self, logits, target_seq, seq_len):
+    def metric(self, logits, target_seq, seq_len, optim=None):
         """
         returns a dictionary with metrics
         Notation. B: batch size; T: seq len (== fix_len)
@@ -98,6 +115,16 @@ class GPT2(AModel):
             cost = self._get_reconstruction_error(logits, target_seq)
             stats['PPL'] = torch.exp(batch_size * cost / torch.sum(seq_len))
 
+            # sequence accuracy:
+            pad_mask = (target_seq == self.ignore_index)
+            prediction[pad_mask] = 0
+            target_seq[pad_mask] = 0
+            sequence_distance = torch.sum((prediction != target_seq).float(), dim=1)
+            stats['sequence accuracy'] = torch.mean((sequence_distance == 0).float())
+
+            if optim is not None:
+                stats['lr'] = torch.tensor(optim['optimizer']['opt'].param_groups[0]['lr'], device=self.device)
+
             if self.metrics is not None:
                 for m in self.metrics:
                     stats[type(m).__name__] = m(logits, target_seq)
@@ -111,7 +138,7 @@ class GPT2(AModel):
         """
 
         batch_size = y.size(0)
-        y = y.contiguous().view(batch_size * self.fix_len, -1)
+        y = y.contiguous().view(batch_size * y.size(1), -1)
         y_target = y_target.contiguous().view(-1)
 
         cost = nn.functional.cross_entropy(y, y_target, ignore_index=self.ignore_index, reduction='sum')
@@ -139,12 +166,16 @@ class GPT2(AModel):
 
         loss_stats = self.loss(logits, target_seq, stats)
 
+        # update lr
+        lr = scheduler['lr_scheduler'](step)
+        optimizer['optimizer']['opt'].param_groups[0]['lr'] = lr
+
         optimizer['optimizer']['opt'].zero_grad()
         loss_stats['NLL-Loss'].backward()
         clip_grad_norm(self.parameters(), optimizer['optimizer'])
         optimizer['optimizer']['opt'].step()
 
-        metric_stats, prediction = self.metric(logits, target_seq, seq_len)
+        metric_stats, prediction = self.metric(logits, target_seq, seq_len, optim=optimizer)
 
         return {**loss_stats,
                 **metric_stats,
@@ -398,6 +429,9 @@ class RealSchema(AModel):
             prediction = y.argmax(dim=-1)
             stats['number_of_hits'] = torch.sum((prediction == y_target).float()) / float(batch_size)
 
+            # sequence accuracy:
+            stats['sequence accuracy'] = torch.sum((torch.sum((prediction != y_target).float(), dim=1) == 0).float())
+
             # Number of edges in graph:
             stats["n_edges_in_graph"] = torch.sum(adj_matrix)
 
@@ -418,17 +452,12 @@ class RealSchema(AModel):
 
     def _get_reconstruction_error(self, y, y_target, seq_len):
         """
-        returns the loss function of the (discrete) Wasserstein autoencoder
         Notation. B: batch size; T: seq len (== fix_len); L: random walk length
         """
-
         batch_size = seq_len.size(0)
-        y = y.contiguous().view(batch_size * self.fix_len, -1)
+        y = y.contiguous().view(batch_size * y.size(1), -1)
         y_target = y_target.contiguous().view(-1)
-
-        cost = nn.functional.cross_entropy(y, y_target, ignore_index=self.ignore_index, reduction='sum')
-        cost = cost / float(batch_size)
-
+        cost = nn.functional.cross_entropy(y, y_target, ignore_index=self.ignore_index, label_smoothing=0.1)
         return cost
 
 
@@ -524,7 +553,306 @@ class RealSchema(AModel):
         stats['PPL'] = torch.tensor(0, device=self.device)
         stats['number_of_hits'] = torch.tensor(0, device=self.device)
         stats['symbols'] = torch.tensor(0, device=self.device)
+        stats['sequence accuracy'] = torch.tensor(0, device=self.device)
+        stats['lr'] = torch.tensor(0, device=self.device)
         return stats
+
+class Translator(AModel):
+
+    def __init__(self, pad_token_id, fix_len, **kwargs):
+        super(Translator, self).__init__(**kwargs)
+        self.fix_len = fix_len
+        self.ignore_index = pad_token_id
+
+        self.word_dropout = kwargs.get('word_dropout', 0.0)
+
+        # Encoder:
+        config = BertConfig().from_pretrained('bert-base-uncased')
+        encoder_kwargs = kwargs['encoder']['args']
+        config.hidden_size = encoder_kwargs.get('hidden_size', config.hidden_size)
+        config.num_hidden_layers = encoder_kwargs.get('num_hidden_layers', config.num_hidden_layers)
+        config.num_attention_heads = encoder_kwargs.get('num_attention_heads', config.num_attention_heads)
+        config.intermediate_size = encoder_kwargs.get('intermediate_size', config.intermediate_size)
+
+        vocab_size = encoder_kwargs.get('vocab_size', None)
+        if vocab_size is not None:
+            config.vocab_size = vocab_size
+        if encoder_kwargs.get('pretrained', True):
+            self.get_hidden_states = BertModel.from_pretrained('bert-base-uncased', config=config)
+        else:
+            self.get_hidden_states = BertModel(config=config)
+
+        # Decoder:
+        config = GPT2Config.from_pretrained('gpt2')
+        decoder_kwargs = kwargs['decoder']['args']
+        config.add_cross_attention = True
+        config.n_embd = decoder_kwargs.get('hidden_size', config.n_embd)
+        config.n_layer = decoder_kwargs.get('num_hidden_layers', config.n_layer)
+        config.n_head = decoder_kwargs.get('num_attention_heads', config.n_head)
+        config.n_inner = decoder_kwargs.get('intermediate_size', config.n_inner)
+        vocab_size = decoder_kwargs.get('vocab_size', None)
+        if vocab_size is not None:
+            config.vocab_size = vocab_size
+        if decoder_kwargs.get('pretrained', True):
+            self.get_logits = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
+        else:
+            self.get_logits = GPT2LMHeadModel(config=config)
+
+        if self.metrics is not None:
+            for m in self.metrics:
+                m.ignore_index = self.ignore_index
+                m.reduce = self.reduce
+
+        print("---------------")
+        print("Translation Transformer")
+        print("---------------")
+
+    def forward(self, enc_input_seq, dec_input_seq, enc_attn_mask, dec_attn_mask):
+        """
+        input: tuple(data, seq_len), shape: ([B, T], [T])
+        Notation. B: batch size; T: seq len (== fix_len)
+        """
+
+        hidden_states = self.get_hidden_states(input_ids=enc_input_seq,
+                                               attention_mask=enc_attn_mask,
+                                               token_type_ids=None,
+                                               position_ids=None,
+                                               head_mask=None,
+                                               use_cache=False,
+                                               output_attentions=False,
+                                               output_hidden_states=False,
+                                               return_dict=False, )[0]  # [B, L, D]
+
+        # Decoding:
+        logits = self.get_logits(input_ids=dec_input_seq,
+                                 encoder_hidden_states=hidden_states,
+                                 attention_mask=dec_attn_mask,
+                                 token_type_ids=None,
+                                 position_ids=None,
+                                 head_mask=None,
+                                 use_cache=False,
+                                 output_attentions=False,
+                                 output_hidden_states=False,
+                                 return_dict=False, )[0]
+
+        return logits
+
+    def train_step(self, minibatch: Any, optimizer: Any, step: int, scheduler: Any = None):
+        """
+        Notation. B: batch size; T: seq len (== fix_len); L: random walk length
+        """
+        enc_input_seq = minibatch['input_enc']
+        dec_input_seq = minibatch['input_dec']
+        target_seq = minibatch['target_dec']
+        enc_attn_mask = minibatch['attn_mask_enc']
+        dec_attn_mask = minibatch['attn_mask_dec']
+
+        # word dropout
+        if self.word_dropout > 0:
+            word_dropout_mask = torch.empty_like(dec_input_seq).bernoulli_(1 - self.word_dropout)
+            dec_attn_mask = word_dropout_mask * dec_attn_mask
+
+
+        # Statistics
+        stats = self.new_stats()
+
+        # Train loss
+        logits = self.forward(enc_input_seq, dec_input_seq, enc_attn_mask, dec_attn_mask)
+
+        loss_stats = self.loss(logits, target_seq, stats)
+
+        optimizer['optimizer']['opt'].zero_grad()
+        # update lr
+        lr = scheduler['lr_scheduler'](step)
+        optimizer['optimizer']['opt'].param_groups[0]['lr'] = lr
+        loss_stats['loss'].backward()
+        clip_grad_norm(self.parameters(), optimizer['optimizer'])
+        optimizer['optimizer']['opt'].step()
+
+        metric_stats, prediction = self.metric(logits, target_seq, optimizer)
+
+        return {**loss_stats,
+                **metric_stats,
+                **{'reconstruction': (prediction, dec_input_seq)}}
+
+    def validate_step(self, minibatch: Any):
+        """
+        Notation. B: batch size; T: seq len (== fix_len); L: random walk length
+        """
+        enc_input_seq = minibatch['input_enc']
+        dec_input_seq = minibatch['input_dec']
+        target_seq = minibatch['target_dec']
+        enc_attn_mask = minibatch['attn_mask_enc']
+        dec_attn_mask = minibatch['attn_mask_dec']
+
+        # Statistics
+        stats = self.new_stats()
+
+        # Evaluate model:
+        self.eval()
+
+        logits = self.forward(enc_input_seq, dec_input_seq, enc_attn_mask, dec_attn_mask)
+
+        loss_stats = self.loss(logits, target_seq, stats)
+
+        metric_stats, prediction = self.metric(logits, target_seq)
+
+        return {**loss_stats,
+                **metric_stats,
+                **{'reconstruction': (prediction, dec_input_seq)}}
+
+    def loss(self, y, y_target, stats):
+        batch_size = y.size(0)
+        y = y.contiguous().view(batch_size * y.size(1), -1)
+        y_target = y_target.contiguous().view(-1)
+        loss = nn.functional.cross_entropy(y, y_target, ignore_index=self.ignore_index, label_smoothing=0.1)
+        stats['loss'] = loss
+        stats['NLL-Loss'] = loss
+        return stats
+
+
+    def metric(self, y, y_target, optim=None):
+        """
+        returns a dictionary with metrics
+        Notation. B: batch size; T: seq len (== fix_len); L: random walk length
+        """
+        with torch.no_grad():
+            batch_size = y.size(0)
+            stats = self.new_metric_stats()
+
+            # Number of hits:
+            prediction = y.argmax(dim=-1)
+            stats['number_of_hits'] = torch.sum((prediction == y_target).float()) / float(batch_size)
+
+            # sequence accuracy:
+            pad_mask = (y_target == self.ignore_index)
+            prediction[pad_mask] = 0
+            y_target[pad_mask] = 0
+            sequence_distance = torch.sum((prediction != y_target).float(), dim=1)
+            stats['sequence accuracy'] = torch.mean((sequence_distance == 0).float())
+
+            if optim is not None:
+                stats['lr'] = torch.tensor(optim['optimizer']['opt'].param_groups[0]['lr'], device=self.device)
+
+            if self.metrics is not None:
+                for m in self.metrics:
+                    stats[type(m).__name__] = m(y, y_target)
+
+            return stats, prediction
+
+    def new_stats(self) -> Dict:
+        stats = dict()
+        stats['loss'] = torch.tensor(0, device=self.device)
+        stats['NLL-Loss'] = torch.tensor(0, device=self.device)
+        stats['KL-RWs'] = torch.tensor(0, device=self.device)
+        stats['KL-0'] = torch.tensor(0, device=self.device)
+        stats['KL-Graph'] = torch.tensor(0, device=self.device)
+        stats['weight-KL-RWs'] = torch.tensor(0, device=self.device)
+        stats['weight-KL-Graph'] = torch.tensor(0, device=self.device)
+
+        return stats
+
+    def new_metric_stats(self) -> Dict:
+        stats = dict()
+        stats['PPL'] = torch.tensor(0, device=self.device)
+        stats['number_of_hits'] = torch.tensor(0, device=self.device)
+        stats['symbols'] = torch.tensor(0, device=self.device)
+        stats['lr'] = torch.tensor(0, device=self.device)
+        return stats
+
+class TranslatorSchema(RealSchema):
+    def __init__(self, pad_token_id, fix_len, **kwargs):
+        super(TranslatorSchema, self).__init__(pad_token_id, fix_len, **kwargs)
+
+    def train_step(self, minibatch: Any, optimizer: Any, step: int, scheduler: Any = None):
+        """
+        Notation. B: batch size; T: seq len (== fix_len); L: random walk length
+        """
+        enc_input_seq = minibatch['input_enc']
+        dec_input_seq = minibatch['input_dec']
+        target_seq = minibatch['target_dec']
+        seq_len = minibatch['length_dec']
+        enc_attn_mask = minibatch['attn_mask_enc']
+        dec_attn_mask = minibatch['attn_mask_dec']
+
+        # word dropout
+        if self.word_dropout > 0:
+            word_dropout_mask = torch.empty_like(dec_input_seq).bernoulli_(1 - self.word_dropout)
+            dec_attn_mask = word_dropout_mask * dec_attn_mask
+
+        # Statistics
+        stats = self.new_stats()
+
+        # schedulers
+        beta_rw = torch.tensor(scheduler['beta_scheduler_kl_rws'](step), device=self.device)
+        tau_rw = torch.tensor(scheduler['temperature_scheduler_rws'](step), device=self.device)
+        beta_graph = torch.tensor(scheduler['beta_scheduler_kl_graph'](step), device=self.device)
+        tau_graph = torch.tensor(scheduler['temperature_scheduler_graph'](step), device=self.device)
+
+        # Train loss
+        logits, z_post, kl_rws, kl_0, kl_graph, \
+        adj_matrix = self.forward(enc_input_seq, dec_input_seq, enc_attn_mask, dec_attn_mask, tau_rw, tau_graph,
+                                  hard_graph_samples=False)
+
+        loss_stats = self.loss(logits, target_seq, kl_rws, kl_0, kl_graph, stats, seq_len, beta_rw=beta_rw,
+                               beta_graph=beta_graph)
+
+        optimizer['optimizer']['opt'].zero_grad()
+        # update lr
+        lr = scheduler['lr_scheduler'](step)
+        optimizer['optimizer']['opt'].param_groups[0]['lr'] = lr
+        loss_stats['loss'].backward()
+        optimizer['optimizer']['opt'].step()
+
+        metric_stats, prediction = self.metric(logits, target_seq, kl_rws, kl_0, kl_graph, seq_len, adj_matrix, optimizer)
+
+        z_post = torch.sum(z_post * self.indices.to(self.device), dim=-1)  # [B, L]
+
+
+        return {**loss_stats,
+                **metric_stats,
+                **{'reconstruction': (prediction, dec_input_seq)},
+                **{'symbols': z_post}}
+
+    def metric(self, y, y_target, kl_rws, kl_0, kl_graph, seq_len, adj_matrix, optim=None):
+        """
+        returns a dictionary with metrics
+        Notation. B: batch size; T: seq len (== fix_len); L: random walk length
+        """
+        with torch.no_grad():
+            batch_size = seq_len.size(0)
+            stats = self.new_metric_stats()
+
+            # Number of hits:
+            prediction = y.argmax(dim=-1)
+            stats['number_of_hits'] = torch.sum((prediction == y_target).float()) / float(batch_size)
+
+            # sequence accuracy:
+            pad_mask = (y_target == self.ignore_index)
+            prediction[pad_mask] = 0
+            y_target[pad_mask] = 0
+            sequence_distance = torch.sum((prediction != y_target).float(), dim=1)
+            stats['sequence accuracy'] = torch.mean((sequence_distance == 0).float())
+
+            if optim is not None:
+                stats['lr'] = torch.tensor(optim['optimizer']['opt'].param_groups[0]['lr'], device=self.device)
+
+            # Number of edges in graph:
+            stats["n_edges_in_graph"] = torch.sum(adj_matrix)
+
+            # Perplexity:
+            cost = self._get_reconstruction_error(y, y_target, seq_len)
+
+            kl_graph = batch_size * kl_graph  # since the normalization in "_get_distance_reg"
+                                              # is for training only.
+            stats['PPL'] = torch.exp(batch_size * (cost + (kl_rws + kl_0) + kl_graph) / torch.sum(seq_len))
+
+
+            if self.metrics is not None:
+                for m in self.metrics:
+                    stats[type(m).__name__] = m(y, y_target)
+
+            return stats, prediction
 
 
 class SyntheticSchema(AModel):
