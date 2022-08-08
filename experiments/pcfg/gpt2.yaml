@@ -1,0 +1,58 @@
+name: pcfg/gpt2/
+num_runs: 1
+num_workers: 1
+gpus: !!python/tuple ['0']
+seed: 1
+
+model:
+  module: hiddenschemanetworks.models.languagemodels
+  name: GPT2
+  args:
+    pretrained: False
+    hidden_size: 512
+    num_hidden_layers: 6
+    num_attention_heads: 8
+    intermediate_size: 2048
+
+data_loader:
+  module: hiddenschemanetworks.data.dataloaders
+  name: DataLoaderPCFG
+  args:
+    batch_size: 256
+    path_to_data: /raid/data/pcfg
+    atomic_style: true
+
+optimizer:
+  module: torch.optim
+  name: Adam
+  args:
+    lr: 0.0001
+    betas: !!python/tuple [0.9, 0.998]
+
+trainer:
+  module: hiddenschemanetworks.trainer
+  name: TextTrainer
+  args:
+    bm_metric: NLL-Loss
+    save_after_epoch: 20
+    reconstruction_every: 500
+    num_rec_sentences: 15
+    num_samples: 0
+    num_interpolation_samples: 0
+    num_interpolation_steps: 0
+    heat_map: false
+    schedulers: !!python/tuple
+      - module: hiddenschemanetworks.utils.param_scheduler
+        name: WarmupScheduler
+        label: lr_scheduler
+        args:
+          max_value: 2.0
+          warmup_steps: 8000
+  epochs: 200
+  save_dir: /rdata/results
+  logging:
+    tensorboard_dir: /rdata/results
+    logging_dir: /rdata/results
+    formatters:
+      verbose: "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s"
+      simple: "%(levelname)s %(asctime)s %(message)s"

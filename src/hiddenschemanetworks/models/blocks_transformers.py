@@ -39,7 +39,10 @@ class EncoderSchema(EncodeOntoRW):
                                             **kwargs)
 
         config = BertConfig().from_pretrained('bert-base-uncased')
-
+        config.hidden_size = kwargs.get('hidden_size', config.hidden_size)
+        config.num_hidden_layers = kwargs.get('num_hidden_layers', config.num_hidden_layers)
+        config.num_attention_heads = kwargs.get('num_attention_heads', config.num_attention_heads)
+        config.intermediate_size = kwargs.get('intermediate_size', config.intermediate_size)
         vocab_size = kwargs.get('vocab_size', None)
         if vocab_size is not None:
             config.vocab_size = vocab_size
@@ -282,22 +285,44 @@ class DecoderSchema(Block):
         super(DecoderSchema, self).__init__(fix_len=fix_len, use_huggingface_models=True, **kwargs)
 
         config = GPT2Config.from_pretrained('gpt2')
+        config.n_embd = kwargs.get('hidden_size', config.n_embd)
+        config.n_layer = kwargs.get('num_hidden_layers', config.n_layer)
+        config.n_head = kwargs.get('num_attention_heads', config.n_head)
+        config.n_inner = kwargs.get('intermediate_size', config.n_inner)
         vocab_size = kwargs.get('vocab_size', None)
         if vocab_size is not None:
             config.vocab_size = vocab_size
-        rw_pos_encoding = kwargs.get('rw_pos_encoding', False)
-        if kwargs.get('pretrained', True):
-            self.get_logits, self.loading_info = PseudoSelfAttentionGPT2LMHeadModel.from_pretrained('gpt2',
-                                                                                                    rw_len=rw_len,
-                                                                                                    symbol_dim=symbol_dim,
-                                                                                                    rw_pos_encoding=rw_pos_encoding,
-                                                                                                    output_loading_info=True,
-                                                                                                    config=config)
+        rw_pos_encoding = kwargs.get('rw_pos_encoding', True)
+
+
+        self.decoder_type = kwargs.get('decoder_type')
+        if self.decoder_type == 'GPT2-CrossAttention':
+            config.add_cross_attention = True
+            self.map_symbols = nn.Linear(symbol_dim, config.hidden_size) if symbol_dim != config.hidden_size else None
+            if kwargs.get('pretrained', True):
+                self.get_logits, self.loading_info = GPT2LMHeadModel.from_pretrained('gpt2',
+                                                                                 config=config,
+                                                                                 output_loading_info=True)
+            else:
+                self.get_logits = GPT2LMHeadModel(config=config)
+
+        elif self.decoder_type == 'GPT2-PseudoSelfAttention':
+            if kwargs.get('pretrained', True):
+                self.get_logits, self.loading_info = PseudoSelfAttentionGPT2LMHeadModel.from_pretrained('gpt2',
+                                                                                                        rw_len=rw_len,
+                                                                                                        symbol_dim=symbol_dim,
+                                                                                                        rw_pos_encoding=True,
+                                                                                                        output_loading_info=True,
+                                                                                                        config=config)
+            else:
+                self.get_logits = PseudoSelfAttentionGPT2LMHeadModel(rw_len=rw_len,
+                                                                     symbol_dim=symbol_dim,
+                                                                     rw_pos_encoding=rw_pos_encoding,
+                                                                     config=config)
         else:
-            self.get_logits = PseudoSelfAttentionGPT2LMHeadModel(rw_len=rw_len,
-                                                                symbol_dim=symbol_dim,
-                                                                rw_pos_encoding=rw_pos_encoding,
-                                                                config=config)
+            raise ValueError(
+                "decoder_type undefined. Please choose either GPT2-CrossAttention or GPT2-PseudoSelfAttention."
+            )
     def forward(self,
                 input_ids,
                 symbol_seq,
@@ -305,6 +330,9 @@ class DecoderSchema(Block):
                 token_type_ids=None,
                 position_ids=None,
                 head_mask=None, ):
+
+        if self.decoder_type == 'GPT2-CrossAttention':
+            symbol_seq = self.map_symbols(symbol_seq) if self.map_symbols is not None else symbol_seq
 
         logits = self.get_logits(input_ids=input_ids,
                                  encoder_hidden_states=symbol_seq,

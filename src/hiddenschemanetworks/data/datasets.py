@@ -255,7 +255,25 @@ def YahooAnswers(*args, **kwargs):
 def YelpReview(*args, **kwargs):
     return _setup_datasets(*(("YelpReview",) + args), **kwargs)
 
-def _setup_pcfg(fix_len=225, root='./data'):
+def _setup_pcfg(root='./data', atomic_style=False, ae_style=False, train_on_object_only=True):
+    """
+    if atomic_style is false, this will be a translation task, i.e. the decoder input will only be the target
+    else, the decoder input is source + target
+
+    if ae_style is false, the encoder input is only the source
+    else, the encoder input is source + <gen token> + target
+
+    if train_on_object_only is true, the decoder target is only the target
+    else, the decoder target is source + target
+    only valid if atomic_style is true
+
+    the maximum length of inputs is 71
+    the maximum length of targets is 201 (only 3 examples with more)
+    if atomic_style, maximum lenght of targets is 250
+    """
+    fix_len_src = 235 if ae_style else 71
+    fix_len_tgt = 235 if atomic_style else 201
+
 
     local_paths = []
     for url_tuple in URLS['PCFG']:
@@ -269,38 +287,69 @@ def _setup_pcfg(fix_len=225, root='./data'):
         local_paths.append(tuple(path_tuple))
 
     dataset_list = []
+    if atomic_style:
+        specials = ['<sos>', '<eos>', '<gen>']
+    else:
+        specials = ['<sos>', '<eos>']
+
     for i, path_tuple in enumerate(local_paths):
         source_path, target_path = path_tuple
         source_file = open(source_path, 'r').read()
         target_file = open(target_path, 'r').read()
         if i == 0:
-            vocab = Vocab(build_vocab_from_iterator([source_file.split()], specials=['<sos>', '<eos>']))
+            vocab = Vocab(build_vocab_from_iterator([source_file.split()], specials=specials))
         SOS = vocab['<sos>']
         EOS = vocab['<eos>']
+        if atomic_style:
+            GEN = vocab['<gen>']
 
         dataset = []
         for source_line, target_line in zip(source_file.split('\n')[:-1], target_file.split('\n')[:-1]):
             data = dict()
 
             source_tokens = source_line.split(' ')
-            source_tokens = vocab(source_tokens[:min(len(source_tokens), fix_len)])
+            source_tokens = vocab(source_tokens[:min(len(source_tokens), fix_len_src)])
             target_tokens = target_line.split(' ')
-            target_tokens = vocab(target_tokens[:min(len(target_tokens), fix_len-1)])
-
+            max_len_tgt = fix_len_tgt - len(source_tokens) - 2 if atomic_style else fix_len_tgt - 1
+            target_tokens = vocab(target_tokens[:min(len(target_tokens), max_len_tgt)])
 
             source_len = len(source_tokens)
             target_len = len(target_tokens)
-            source_pad_len = fix_len - source_len
-            target_pad_len = fix_len - target_len - 1
+            source_pad_len = fix_len_src - source_len
+            target_pad_len = fix_len_tgt - target_len - 1
 
-            data['length_enc'] = source_len
-            data['input_enc'] = source_tokens + [SOS] * source_pad_len
-            data['attn_mask_enc'] = [1] * source_len + [0] * source_pad_len
+            if ae_style:
+                data['length_enc'] = source_len + target_len + 1
+                total_pad_len = fix_len_src - source_len - target_len - 1
+                data['input_enc'] = source_tokens + [GEN] + target_tokens + [EOS] * total_pad_len
+                data['attn_mask_enc'] = [1] * (source_len + target_len + 1) + [0] * total_pad_len
+                data['token_type_ids'] = [0] * source_len + [1] * source_pad_len
+            else:
+                data['length_enc'] = source_len
+                data['input_enc'] = source_tokens + [EOS] * source_pad_len
+                data['attn_mask_enc'] = [1] * source_len + [0] * source_pad_len
 
-            data['length_dec'] = target_len
-            data['input_dec'] = [SOS] + target_tokens + [EOS] * target_pad_len
-            data['attn_mask_dec'] = [1] * (target_len + 1) + [0] * target_pad_len
-            data['target_dec'] = target_tokens + [EOS] + [-100] * target_pad_len
+            if atomic_style:
+                if train_on_object_only:
+                    total_pad_len = fix_len_tgt - source_len - target_len - 2
+                    data['length_dec'] = target_len + source_len + 2
+                    data['input_dec'] = [SOS] + source_tokens + [GEN] + target_tokens + [EOS] * total_pad_len
+                    data['attn_mask_dec'] = [0] * (source_len + 1) + [1] * (target_len + 1) + [0] * total_pad_len
+                    data['target_dec'] = [-100] * (source_len + 1) + target_tokens + [EOS] + [-100] * total_pad_len
+                    data['mask_sub_rel'] = [0] * (source_len + 1) + [1] * (target_len + 1) + [2] * total_pad_len
+                else:
+                    total_pad_len = fix_len_tgt - source_len - target_len - 1
+                    data['length_dec'] = target_len + source_len + 1
+                    data['input_dec'] = [SOS] + source_tokens + target_tokens + [EOS] * total_pad_len
+                    data['attn_mask_dec'] = [1] * (source_len + target_len + 1) + [0] * total_pad_len
+                    data['target_dec'] = source_tokens + target_tokens + [EOS] + [-100] * total_pad_len
+                    data['mask_sub_rel'] = [0] * source_len + [1] * (target_len + 1) + [2] * total_pad_len
+            else:
+                data['length_dec'] = target_len
+                data['input_dec'] = [SOS] + target_tokens + [EOS] * target_pad_len
+                data['attn_mask_dec'] = [1] * (target_len + 1) + [0] * target_pad_len
+                data['target_dec'] = target_tokens + [EOS] + [-100] * target_pad_len
+                #data['target_dec'] = target_tokens + [-100] + [-100] * target_pad_len
 
             dataset.append(data)
 
@@ -326,8 +375,10 @@ class PCFGDataset(Dataset):
                      'input_dec': np.asarray(self.data[i]['input_dec'], dtype=np.int64),
                      'target_dec': np.asarray(self.data[i]['target_dec'], dtype=np.int64),
                      'attn_mask_dec': np.asarray(self.data[i]['attn_mask_dec']),
-                     'length_dec': np.asarray(self.data[i]['length_dec'])
-                     }
+                     'length_dec': np.asarray(self.data[i]['length_dec']),
+                'token_type_ids': np.asarray(self.data[i]['token_type_ids']),
+                'mask_sub_rel': np.asarray(self.data[i]['mask_sub_rel'])
+                }
 
     def __iter__(self):
         for i in range(self.__len__()):
@@ -343,9 +394,6 @@ class PCFGDataset(Dataset):
     def reverse(self, batch):
         sentences = []
         for indices in batch:
-
-            #index_of_pad = ind if (ind := [indices == -100].nonzero()[0]) > 0 else len(indices)-1
-            #indices = indices[:index_of_pad]
             indices[indices == -100] = 0
             tokens = self.vocab.lookup_tokens(list(indices))
             sentences.append(' '.join(tokens))
@@ -386,9 +434,8 @@ class SyntheticSchemataDataset(Dataset):
         return self.vocab
 
 if __name__ == '__main__':
-    train, _, _ = PCFG(fix_len=100, root='/raid/data/pcfg')
+    train, _, _ = PCFG(fix_len=500, root='/raid/data/pcfg')
 
-    mb = train[0]
-    inp = torch.tensor([mb['input_dec']])
-    print(inp)
-    print(train.reverse(inp))
+    inp_len = train.data[:]['input_len']
+    #tgt_len = train[:]['target_len']
+    print(inp_len.size())

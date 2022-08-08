@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 import pickle
 import numpy as np
 from scipy import sparse as sp
+import matplotlib.pyplot as plt
 
 
 from hiddenschemanetworks.data.datasets import PennTreebank, YelpReview, YahooAnswers,\
@@ -275,10 +276,14 @@ class DataLoaderPCFG(DataLoaderText):
     Data loader for PTB with pretrained tokenizers and models from huggingface
     """
     def __init__(self, device, rank: int = 0, world_size=-1, **kwargs):
+        self.atomic_style = kwargs.pop('atomic_style', False)
+        self.ae_style = kwargs.pop('ae_style', False)
+        self.train_on_object_only = kwargs.pop('train_on_object_only', True)
         super().__init__(device, rank, world_size, **kwargs)
 
     def get_datasets(self, path_to_data):
-        return PCFG(root=path_to_data, fix_len=self._fix_len)
+        return PCFG(root=path_to_data, atomic_style=self.atomic_style, ae_style=self.ae_style,
+                    train_on_object_only=self.train_on_object_only)
 
     @property
     def vocab(self):
@@ -289,7 +294,20 @@ class DataLoaderPCFG(DataLoaderText):
         return None
 
 if __name__ == '__main__':
-    loader = DataLoaderPCFG(torch.device('cuda:0'), path_to_data='/raid/data/pcfg', batch_size=10)
+    loader = DataLoaderPCFG(torch.device('cuda:0'), path_to_data='/raid/data/pcfg', batch_size=100,
+                            atomic_style=True)
 
+    inp_lens = []
     for mb in loader.train:
-        print(mb)
+        inp_lens.append(mb['length_dec'])
+
+    inp_lens = torch.cat(inp_lens, dim=0)
+    bins, counts = torch.unique(inp_lens, sorted=True, return_counts=True)
+
+    plt.scatter(bins.numpy(), counts.numpy())
+    plt.show()
+    print(bins[-10:])
+    print(counts[-10:])
+
+
+
