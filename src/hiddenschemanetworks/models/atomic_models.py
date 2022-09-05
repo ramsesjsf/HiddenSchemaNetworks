@@ -190,7 +190,7 @@ class RealSchemata(AModel):
         return stats
 
 
-    def metric(self, y, y_target, kl_rws, kl_0, kl_graph, kl_weibull_gamma, seq_len, adj_matrix, mask_sub_rel):
+    def metric(self, y, y_target, kl_rws, kl_0, kl_graph, kl_weibull_gamma, seq_len, adj_matrix, mask_sub_rel, optim=None):
         """
         returns a dictionary with metrics
         Notation. B: batch size; T: seq len (== fix_len); L: random walk length
@@ -227,6 +227,9 @@ class RealSchemata(AModel):
             y_target[pad_mask] = 0
             sequence_distance = torch.sum((prediction != y_target).float(), dim=1)
             stats['sequence accuracy'] = torch.mean((sequence_distance == 0).float())
+
+            if optim is not None:
+                stats['lr'] = torch.tensor(optim.param_groups[0]['lr'], device=self.device)
 
             if self.metrics is not None:
                 for m in self.metrics:
@@ -465,6 +468,7 @@ class RealSchemata(AModel):
         stats['PPL'] = torch.tensor(0, device=self.device)
         stats['number_of_hits'] = torch.tensor(0, device=self.device)
         stats['symbols'] = torch.tensor(0, device=self.device)
+        stats['lr'] = torch.tensor(0, device=self.device)
         return stats
 
 
@@ -778,8 +782,9 @@ class RealSchemataAtomic2(RealSchemataPretrained):
                                beta_rw=beta_rw, beta_graph=beta_graph)
 
         # update lr
-        lr = scheduler['lr_scheduler'](step)
-        optimizer['optimizer']['opt'].param_groups[0]['lr'] = lr
+        if lr_scheduler := scheduler.get('lr_scheduler', None) is not None:
+            lr = lr_scheduler(step)
+            optimizer['optimizer']['opt'].param_groups[0]['lr'] = lr
 
         optimizer['optimizer']['opt'].zero_grad()
         loss_stats['loss'].backward()
@@ -787,7 +792,7 @@ class RealSchemataAtomic2(RealSchemataPretrained):
         optimizer['optimizer']['opt'].step()
 
         metric_stats, prediction = self.metric(logits, target_seq, kl_rws, kl_0, kl_graph, kl_weibull_gamma,
-                                               seq_len, adj_matrix, mask_sub_rel)
+                                               seq_len, adj_matrix, mask_sub_rel, optimizer['optimizer']['opt'])
 
         z_post = torch.sum(z_post * self.indices.to(self.device), dim=-1)  # [B, L]
 

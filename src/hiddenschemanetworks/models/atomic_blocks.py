@@ -83,7 +83,7 @@ class EncodeOntoRW(Block):
         # posterior log transition prob:
         cond = (q_matrix > 0.0).float()
         epsilon = torch.ones(q_matrix.shape).fill_(1e-8).to(self.device)
-        log_q_matrix = torch.log(torch.max(q_matrix + (1 - cond), epsilon))
+        log_q_matrix = torch.log(torch.max(q_matrix - (1 - cond), epsilon))
 
         # prior log transition prob:
         if self.aggregated_post and (p_matrix.dim() == 4):
@@ -92,14 +92,14 @@ class EncodeOntoRW(Block):
 
         cond = (p_matrix > 0.0).float()
         epsilon = torch.ones(p_matrix.shape).fill_(1e-8).to(self.device)
-        log_p_matrix = torch.log(torch.max(p_matrix + (1 - cond), epsilon))
+        log_p_matrix = torch.log(torch.max(p_matrix - (1 - cond), epsilon))
 
         if self.aggregated_post:
             # kl starting point:
             rho_0 = walk_prob[0]  # [n_symbols]
             cond = (rho_0 > 0.0).float()
             epsilon = torch.ones(rho_0.shape).fill_(1e-8).to(self.device)
-            log_rho_0 = torch.log(torch.max(rho_0 + (1 - cond), epsilon))
+            log_rho_0 = torch.log(torch.max(rho_0 - (1 - cond), epsilon))
             if f0_prior is not None:
                 log_pi_0 = torch.log(torch.softmax(f0_prior, 0))
                 kl_0 = torch.sum(rho_0 * (log_rho_0 - log_pi_0))
@@ -120,7 +120,7 @@ class EncodeOntoRW(Block):
             rho_0 = walk_prob[:, 0]  # [B, n_symbols]
             cond = (rho_0 > 0.0).float()
             epsilon = torch.ones(rho_0.shape).fill_(1e-8).to(self.device)
-            log_rho_0 = torch.log(torch.max(rho_0 + (1 - cond), epsilon))
+            log_rho_0 = torch.log(torch.max(rho_0 - (1 - cond), epsilon))
             if f0_prior is not None:
                 log_pi_0 = torch.log(torch.softmax(f0_prior, -1))
                 if f0_prior.dim() == 2:
@@ -352,33 +352,39 @@ class EncoderSchema(EncodeOntoRW):
                                             **kwargs)
 
         self.encoder_type = kwargs.get('encoder_type')
+        pretrained = kwargs.get('pretrained', True)
         if self.encoder_type == 'BERT':
-            config = BertConfig().from_pretrained('bert-base-uncased')
-            config.hidden_size = kwargs.get('hidden_size', config.hidden_size)
-            config.num_hidden_layers = kwargs.get('num_hidden_layers', config.num_hidden_layers)
-            config.num_attention_heads = kwargs.get('num_attention_heads', config.num_attention_heads)
-            config.intermediate_size = kwargs.get('intermediate_size', config.intermediate_size)
+            self.config = BertConfig().from_pretrained('bert-base-uncased')
+            if not pretrained:
+                self.config.hidden_size = kwargs.get('hidden_size', self.config.hidden_size)
+                self.config.num_hidden_layers = kwargs.get('num_hidden_layers', self.config.num_hidden_layers)
+                self.config.num_attention_heads = kwargs.get('num_attention_heads', self.config.num_attention_heads)
+                self.config.intermediate_size = kwargs.get('intermediate_size', self.config.intermediate_size)
             vocab_size = kwargs.get('vocab_size', None)
             if vocab_size is not None:
-                config.vocab_size = vocab_size
-            self.get_hidden_states = BertModel(config)
+                self.config.vocab_size = vocab_size
+            if pretrained:
+                    self.get_hidden_states = BertModel.from_pretrained('bert-base-uncased', config=self.config,
+                                                                       ignore_mismatched_sizes=True)
+            else:
+                self.get_hidden_states = BertModel(self.config)
         else:
             raise ValueError(
                 "encoder_type undefined. Please choose either BERT or GPT2."
             )
 
-        self.cross_att_learn_queries = CrossAttentionWithLearnableQueries(config.hidden_size,
-                                                                          config.num_attention_heads,
-                                                                          config.hidden_size,
-                                                                          config.hidden_dropout_prob)
+        self.cross_att_learn_queries = CrossAttentionWithLearnableQueries(self.config.hidden_size,
+                                                                          self.config.num_attention_heads,
+                                                                          self.config.hidden_size,
+                                                                          self.config.hidden_dropout_prob)
 
-        self.get_logits = nn.Linear(config.hidden_size, n_symbols)
+        self.get_logits = nn.Linear(self.config.hidden_size, n_symbols)
 
         # Learnable queries
-        self.queries = nn.Parameter(torch.randn(self.rw_length, config.hidden_size))
+        self.queries = nn.Parameter(torch.randn(self.rw_length, self.config.hidden_size))
         self.add_pos_encoding = kwargs.get('pos_encoding', False)
         if self.add_pos_encoding:
-            self.pos_encoding_queries = PositionalEncoding(config.hidden_size, dropout=0.0)
+            self.pos_encoding_queries = PositionalEncoding(self.config.hidden_size, dropout=0.0)
 
         self.query_init()
 
@@ -428,34 +434,25 @@ class EncoderAtomic2(EncoderSchema):
     def __init__(self, fix_len, n_symbols, aggregated_post, max_entropy_prior, **kwargs):
         super(EncoderAtomic2, self).__init__(fix_len, n_symbols, aggregated_post, max_entropy_prior, **kwargs)
 
-        config = BertConfig().from_pretrained('bert-base-uncased')
-        config.hidden_size = kwargs.get('hidden_size', config.hidden_size)
-        config.num_hidden_layers = kwargs.get('num_hidden_layers', config.num_hidden_layers)
-        config.num_attention_heads = kwargs.get('num_attention_heads', config.num_attention_heads)
-        config.intermediate_size = kwargs.get('intermediate_size', config.intermediate_size)
-        vocab_size = kwargs.get('vocab_size', None)
-        if vocab_size is not None:
-            config.vocab_size = vocab_size
-
         n_layers_prior = kwargs.get('n_layers_prior')
-        prior_transformer_layers = torch.nn.TransformerEncoderLayer(config.hidden_size, config.num_attention_heads,
-                                                                    config.hidden_size, config.hidden_dropout_prob)
+        prior_transformer_layers = torch.nn.TransformerEncoderLayer(self.config.hidden_size, self.config.num_attention_heads,
+                                                                    self.config.hidden_size, self.config.hidden_dropout_prob)
         self.prior_transformer_blocks = torch.nn.TransformerEncoder(prior_transformer_layers,
                                                                     n_layers_prior)
 
         self.cross_att_learn_queries_prior = self.cross_att_learn_queries
 
-        self.cross_att_learn_queries_post = CrossAttentionWithLearnableQueries(config.hidden_size,
-                                                                               config.num_attention_heads,
-                                                                               config.hidden_size,
-                                                                               config.hidden_dropout_prob)
+        self.cross_att_learn_queries_post = CrossAttentionWithLearnableQueries(self.config.hidden_size,
+                                                                               self.config.num_attention_heads,
+                                                                               self.config.hidden_size,
+                                                                               self.config.hidden_dropout_prob)
 
-        self.get_logits_prior = nn.Linear(config.hidden_size, n_symbols)
-        self.get_logits_post = nn.Linear(config.hidden_size, n_symbols)
+        self.get_logits_prior = nn.Linear(self.config.hidden_size, n_symbols)
+        self.get_logits_post = nn.Linear(self.config.hidden_size, n_symbols)
 
         # Learnable queries
         self.queries_prior = self.queries
-        self.queries_post = nn.Parameter(torch.randn(self.rw_length, config.hidden_size))
+        self.queries_post = nn.Parameter(torch.randn(self.rw_length, self.config.hidden_size))
 
     def forward(self, input, adj_matrix, tau, prior_params, z_aux=None, hard=True):
         """
