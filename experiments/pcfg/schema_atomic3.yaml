@@ -3,20 +3,20 @@ num_runs: 1
 num_workers: 1
 distributed: false
 world_size: 1
-gpus: !!python/tuple ['0']
-seed: 1
+gpus: !!python/tuple ['1']
+seed: 5
 
 model:
   module: hiddenschemanetworks.models.atomic_models
   name: RealSchemataAtomic2
   args:
-    loss_type: VAE   # AE, VAE, VAE-MI
-    n_symbols: 50
+    loss_type: VAE-MI   # AE, VAE, VAE-MI
+    n_symbols: [50, 20]
     mlp_prior_layers: #!!python/tuple [128, 128]  # must be list or null
-    Erdos_edge_prob: 0.5   # 0.5, 0.1
+    Erdos_edge_prob: 0.1   # 0.5, 0.1
     word_dropout: 0.0      # 0.0
-    kl_threshold_rw: 0.1   # 0.5, 0.0
-    kl_threshold_graph: 0.0
+    kl_threshold_rw: 0.5   # 0.5, 0.0
+    kl_threshold_graph: 0.0002
     onehot_symbols: true
     ################# GRAPH
     hard_graph_samples: false
@@ -43,7 +43,7 @@ model:
       name: EncoderAtomic3
       args:
         encoder_type: BERT  # ONLY BERT allowed
-        rw_length: [5]       # MUST BE MULTIPLE OF 2
+        rw_length: [20, 5]       # MUST BE MULTIPLE OF 2
         custom_init: false
         object_from_prior: false
         pos_encoding: true
@@ -53,20 +53,21 @@ model:
         num_hidden_layers: 6
         num_attention_heads: 8
         intermediate_size: 2048
-        pretrained: False
+        pretrained: false
     ################# DECODER
     decoder:
       module: hiddenschemanetworks.models.blocks_transformers
       name: DecoderSchema
       args:
-        decoder_type: GPT2-PseudoSelfAttention     # GPT2-CrossAttention, GPT2-PseudoSelfAttention
+        decoder_type: [GPT2-PseudoSelfAttention, GPT2-CrossAttention]     # GPT2-CrossAttention, GPT2-PseudoSelfAttention
         custom_init: false
 
         hidden_size: 512
         num_hidden_layers: 6
         num_attention_heads: 8
         intermediate_size: 2048
-        pretrained: False
+        pretrained: false
+        pretrained_model_path: /rdata/results/pcfg/gpt2/2307_215443/best_model.pth # use pretrained .pth model
 
 data_loader:
   module: hiddenschemanetworks.data.dataloaders
@@ -76,7 +77,7 @@ data_loader:
     path_to_data: /raid/data/pcfg
     atomic_style: true
     ae_style: true
-    train_on_object_only: [false]
+    train_on_object_only: false
 
 optimizer:
   module: torch.optim
@@ -96,12 +97,12 @@ trainer:
     num_rec_sentences: 10
     num_samples: 0
     schedulers: !!python/tuple
-      - module: hiddenschemanetworks.utils.param_scheduler
-        name: WarmupScheduler
-        label: lr_scheduler
-        args:
-          max_value: 2.0
-          warmup_steps: 8000
+#      - module: hiddenschemanetworks.utils.param_scheduler
+#        name: WarmupScheduler
+#        label: lr_scheduler
+#        args:
+#          max_value: 2.0
+#          warmup_steps: 8000
       - module: hiddenschemanetworks.utils.param_scheduler
         name: PeriodicScheduler  # ExponentialIncrease, ConstantScheduler, PeriodicScheduler
         label: beta_scheduler_kl_rws
@@ -135,7 +136,7 @@ trainer:
           min_temp: 0.75
           training_fraction_to_reach_min: 0.7
           validation_value: 1.0
-  epochs: 200
+  epochs: 100
   save_dir: /rdata/results
   logging:
     tensorboard_dir: /rdata/results

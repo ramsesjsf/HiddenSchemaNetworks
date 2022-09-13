@@ -296,6 +296,7 @@ class DecoderSchema(Block):
             config.vocab_size = vocab_size
         rw_pos_encoding = kwargs.get('rw_pos_encoding', True)
 
+        pretrained_model_path = kwargs.get('pretrained_model_path', None)
 
         self.decoder_type = kwargs.get('decoder_type')
         if self.decoder_type == 'GPT2-CrossAttention':
@@ -327,6 +328,19 @@ class DecoderSchema(Block):
             raise ValueError(
                 "decoder_type undefined. Please choose either GPT2-CrossAttention or GPT2-PseudoSelfAttention."
             )
+
+        if pretrained_model_path is not None:
+            model_state_dict_uncleaned = torch.load(pretrained_model_path)['model_state']
+            model_state_dict = dict()
+            for key, value in model_state_dict_uncleaned.items():
+                # remove the 'get_logits.' in front
+                key = key[11:]
+                model_state_dict[key] = value
+            missing_keys, unexpected_keys = self.get_logits.load_state_dict(model_state_dict, strict=False)
+            print('while loading the pretrained model', pretrained_model_path, 'the following keys did not match:')
+            print('missing keys:', missing_keys)
+            print('unexpected keys:', unexpected_keys)
+
 
     def forward(self,
                 input_ids,
